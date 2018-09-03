@@ -19,6 +19,8 @@ IMAGE_TAG=$(REGISTRY_NAME)/$(IMAGE_NAME):$(IMAGE_VERSION)
 
 REV=$(shell git describe --long --tags --match='v*' --dirty)
 
+GOPKG = github.com/kubernetes-csi/external-provisioner
+
 ifdef V
 TESTARGS = -v -args -alsologtostderr -v 5
 else
@@ -27,12 +29,18 @@ endif
 
 all: csi-provisioner
 
-csi-provisioner:
+csi-provisioner: workspace
 	mkdir -p bin
-	CGO_ENABLED=0 GOOS=linux go build -a -ldflags '-X main.version=$(REV) -extldflags "-static"' -o ./bin/csi-provisioner ./cmd/csi-provisioner
+	GOPATH=${PWD}/workspace CGO_ENABLED=0 GOOS=linux \
+		   go build -a -ldflags '-X main.version=$(REV) -extldflags "-static"' \
+		   -o ./bin/csi-provisioner ${GOPKG}/cmd/csi-provisioner
 
 clean:
-	rm -rf bin deploy/docker/csi-provisioner
+	rm -rf bin deploy/docker/csi-provisioner workspace
+
+workspace:
+	mkdir -p workspace/src/$(dir ${GOPKG})
+	ln -s ${PWD} workspace/src/${GOPKG}
 
 container: csi-provisioner
 	docker build -t $(IMAGE_TAG) .
