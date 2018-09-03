@@ -726,6 +726,21 @@ func (p *csiProvisioner) Provision(ctx context.Context, options controller.Provi
 	pvName := req.Name
 	provisionerCredentials := req.Secrets
 
+	parameters := map[string]string{}
+	// Add SC options
+	for key, value := range req.Parameters {
+		parameters["sc/" + key] = value
+	}
+	// Add PVC options
+	for key, value := range options.PVC.Annotations {
+		parameters["pvc/" + key] = value
+	}
+	// Add PVC name
+	parameters["pvc-name"] = options.PVC.Name
+
+	// Assign new parameter
+	req.Parameters = parameters
+
 	createCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 	klog.V(5).Infof("CreateVolumeRequest %+v", req)
