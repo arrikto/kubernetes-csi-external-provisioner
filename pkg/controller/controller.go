@@ -482,6 +482,21 @@ func (p *csiProvisioner) Provision(options controller.ProvisionOptions) (*v1.Per
 		return nil, fmt.Errorf("failed to strip CSI Parameters of prefixed keys: %v", err)
 	}
 
+	parameters := map[string]string{}
+	// Add SC options
+	for key, value := range req.Parameters {
+		parameters["sc/" + key] = value
+	}
+	// Add PVC options
+	for key, value := range options.PVC.Annotations {
+		parameters["pvc/" + key] = value
+	}
+	// Add PVC name
+	parameters["pvc-name"] = options.PVC.Name
+
+	// Assign new parameter
+	req.Parameters = parameters
+
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	defer cancel()
 	rep, err = p.csiClient.CreateVolume(ctx, &req)
