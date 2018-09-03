@@ -508,10 +508,22 @@ func (p *csiProvisioner) Provision(options controller.VolumeOptions) (*v1.Persis
 		volumeCaps = append(volumeCaps, getVolumeCapability(options, pvcAccessMode, fsType))
 	}
 
+	parameters := map[string]string{}
+	// Add SC options
+	for key, value := range options.Parameters {
+		parameters["sc/" + key] = value
+	}
+	// Add PVC options
+	for key, value := range options.PVC.Annotations {
+		parameters["pvc/" + key] = value
+	}
+	// Add PVC name
+	parameters["pvc-name"] = options.PVC.Name
+
 	// Create a CSI CreateVolumeRequest and Response
 	req := csi.CreateVolumeRequest{
 		Name:               pvName,
-		Parameters:         options.Parameters,
+		Parameters:         parameters,
 		VolumeCapabilities: volumeCaps,
 		CapacityRange: &csi.CapacityRange{
 			RequiredBytes: int64(volSizeBytes),
