@@ -559,7 +559,7 @@ func (p *csiProvisioner) Provision(options controller.VolumeOptions) (*v1.Persis
 
 	// Resolve provision secret credentials.
 	// No PVC is provided when resolving provision/delete secret names, since the PVC may or may not exist at delete time.
-	provisionerSecretRef, err := getSecretReference(provisionerSecretParams, options.Parameters, pvName, nil)
+	provisionerSecretRef, err := getSecretReference(provisionerSecretParams, options.Parameters, pvName, options.PVC)
 	if err != nil {
 		return nil, err
 	}
