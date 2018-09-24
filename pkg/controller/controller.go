@@ -1585,7 +1585,8 @@ func getSecretReference(secretParams secretParamsMap, storageClassParams map[str
 
 		resolvedNamespace, err := resolveTemplate(namespaceTemplate, namespaceParams)
 		if err != nil {
-			return nil, fmt.Errorf("error resolving value %q: %v", namespaceTemplate, err)
+			klog.Warningf("could not resolve value %q: %v", namespaceTemplate, err)
+			return nil, nil
 		}
 		if len(validation.IsDNS1123Label(resolvedNamespace)) > 0 {
 			if namespaceTemplate != resolvedNamespace {
@@ -1609,7 +1610,8 @@ func getSecretReference(secretParams secretParamsMap, storageClassParams map[str
 		}
 		resolvedName, err := resolveTemplate(nameTemplate, nameParams)
 		if err != nil {
-			return nil, fmt.Errorf("error resolving value %q: %v", nameTemplate, err)
+			klog.Warningf("could not resolve value %q: %v", nameTemplate, err)
+			return nil, nil
 		}
 		if len(validation.IsDNS1123Subdomain(resolvedName)) > 0 {
 			if nameTemplate != resolvedName {
@@ -1645,7 +1647,8 @@ func getCredentials(ctx context.Context, k8s kubernetes.Interface, ref *v1.Secre
 
 	secret, err := k8s.CoreV1().Secrets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("error getting secret %s in namespace %s: %v", ref.Name, ref.Namespace, err)
+		klog.Warningf("could not get secret %s in namespace %s: %v", ref.Name, ref.Namespace, err)
+		return nil, nil
 	}
 
 	credentials := map[string]string{}
