@@ -903,7 +903,8 @@ func getSecretReference(secretParams deprecatedSecretParamsMap, storageClassPara
 
 		resolvedNamespace, err := resolveTemplate(namespaceTemplate, namespaceParams)
 		if err != nil {
-			return nil, fmt.Errorf("error resolving value %q: %v", namespaceTemplate, err)
+			glog.Warningf("could not resolve value %q: %v", namespaceTemplate, err)
+			return nil, nil
 		}
 		if len(validation.IsDNS1123Label(resolvedNamespace)) > 0 {
 			if namespaceTemplate != resolvedNamespace {
@@ -927,7 +928,8 @@ func getSecretReference(secretParams deprecatedSecretParamsMap, storageClassPara
 		}
 		resolvedName, err := resolveTemplate(nameTemplate, nameParams)
 		if err != nil {
-			return nil, fmt.Errorf("error resolving value %q: %v", nameTemplate, err)
+			glog.Warningf("could not resolve value %q: %v", nameTemplate, err)
+			return nil, nil
 		}
 		if len(validation.IsDNS1123Subdomain(resolvedName)) > 0 {
 			if nameTemplate != resolvedName {
