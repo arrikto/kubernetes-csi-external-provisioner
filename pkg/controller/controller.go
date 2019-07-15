@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -448,7 +449,7 @@ func (p *csiProvisioner) Provision(options controller.ProvisionOptions) (*v1.Per
 	rep := &csi.CreateVolumeResponse{}
 
 	// Resolve provision secret credentials.
-	provisionerSecretRef, err := getSecretReference(provisionerSecretParams, options.StorageClass.Parameters, pvName, &v1.PersistentVolumeClaim{
+	provisionerSecretsRef, err := getSecretReferenceMany(p.client, provisionerSecretParams, options.StorageClass.Parameters, pvName, &v1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      options.PVC.Name,
 			Namespace: options.PVC.Namespace,
@@ -457,7 +458,7 @@ func (p *csiProvisioner) Provision(options controller.ProvisionOptions) (*v1.Per
 	if err != nil {
 		return nil, err
 	}
-	provisionerCredentials, err := getCredentials(p.client, provisionerSecretRef)
+	provisionerCredentials, err := getCredentialsMany(p.client, provisionerSecretsRef)
 	if err != nil {
 		return nil, err
 	}
@@ -707,7 +708,7 @@ func (p *csiProvisioner) Delete(volume *v1.PersistentVolume) error {
 	if len(storageClassName) != 0 {
 		if storageClass, err := p.client.StorageV1().StorageClasses().Get(storageClassName, metav1.GetOptions{}); err == nil {
 			// Resolve provision secret credentials.
-			provisionerSecretRef, err := getSecretReference(provisionerSecretParams, storageClass.Parameters, volume.Name, &v1.PersistentVolumeClaim{
+			provisionerSecretsRef, err := getSecretReferenceMany(p.client, provisionerSecretParams, storageClass.Parameters, volume.Name, &v1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      volume.Spec.ClaimRef.Name,
 					Namespace: volume.Spec.ClaimRef.Namespace,
@@ -717,7 +718,7 @@ func (p *csiProvisioner) Delete(volume *v1.PersistentVolume) error {
 				return err
 			}
 
-			credentials, err := getCredentials(p.client, provisionerSecretRef)
+			credentials, err := getCredentialsMany(p.client, provisionerSecretsRef)
 			if err != nil {
 				// Continue with deletion, as the secret may have already been deleted.
 				klog.Errorf("Failed to get credentials for volume %s: %s", volume.Name, err.Error())
@@ -814,6 +815,79 @@ func verifyAndGetSecretNameAndNamespaceTemplate(secret secretParamsMap, storageC
 // - the nameTemplate or namespaceTemplate contains a token that cannot be resolved
 // - the resolved name is not a valid secret name
 // - the resolved namespace is not a valid namespace name
+func getSecretReferenceMany(k8s kubernetes.Interface, secretParams secretParamsMap, storageClassParams map[string]string, pvName string, pvc *v1.PersistentVolumeClaim) ([]*v1.SecretReference, error) {
+	nameTemplate, namespaceTemplate, err := verifyAndGetSecretNameAndNamespaceTemplate(secretParams, storageClassParams)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get name and namespace template from params: %v", err)
+	}
+	if nameTemplate == "" && namespaceTemplate == "" {
+		return nil, nil
+	}
+
+	var refs []*v1.SecretReference
+	// Secret namespace template can make use of the PV name or the PVC namespace.
+	// Note that neither of those things are under the control of the PVC user.
+	namespaceParams := map[string]string{tokenPVNameKey: pvName}
+	if pvc != nil {
+		namespaceParams[tokenPVCNameSpaceKey] = pvc.Namespace
+	}
+
+	resolvedNamespace, err := resolveTemplate(namespaceTemplate, namespaceParams)
+	if err != nil {
+		klog.Warningf("could not resolve value %q: %v", namespaceTemplate, err)
+		return nil, nil
+	}
+	if len(validation.IsDNS1123Label(resolvedNamespace)) > 0 {
+		if namespaceTemplate != resolvedNamespace {
+			return nil, fmt.Errorf("%q resolved to %q which is not a valid namespace name", namespaceTemplate, resolvedNamespace)
+		}
+		return nil, fmt.Errorf("%q is not a valid namespace name", namespaceTemplate)
+	}
+
+	secrets, err := k8s.CoreV1().Secrets(resolvedNamespace).List(metav1.ListOptions{})
+	if err != nil {
+		klog.Warningf("could not list secrets in namespace %s: %v", resolvedNamespace, err)
+		return nil, nil
+	}
+
+	names := strings.Split(nameTemplate, ",")
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		// Secret name template can make use of the PV name, PVC name or namespace, or a PVC annotation.
+		// Note that PVC name and annotations are under the PVC user's control.
+		nameParams := map[string]string{tokenPVNameKey: pvName}
+		if pvc != nil {
+			nameParams[tokenPVCNameKey] = pvc.Name
+			nameParams[tokenPVCNameSpaceKey] = pvc.Namespace
+			for k, v := range pvc.Annotations {
+				nameParams["pvc.annotations['"+k+"']"] = v
+			}
+		}
+		resolvedName, err := resolveTemplate(name, nameParams)
+		if err != nil {
+			klog.Warningf("could not resolve value %q: %v", name, err)
+			continue
+			// return nil, nil
+		}
+		found := false
+		for _, secret := range secrets.Items {
+			m, _ := path.Match(resolvedName, secret.ObjectMeta.Name)
+			if m {
+				found = true
+				ref := &v1.SecretReference{}
+				ref.Namespace = resolvedNamespace
+				ref.Name = secret.ObjectMeta.Name
+				refs = append(refs, ref)
+			}
+		}
+		if !found {
+			klog.Warningf("could not find secret %q", resolvedName)
+		}
+	}
+
+	return refs, nil
+}
+
 func getSecretReference(secretParams secretParamsMap, storageClassParams map[string]string, pvName string, pvc *v1.PersistentVolumeClaim) (*v1.SecretReference, error) {
 	nameTemplate, namespaceTemplate, err := verifyAndGetSecretNameAndNamespaceTemplate(secretParams, storageClassParams)
 	if err != nil {
@@ -887,6 +961,23 @@ func resolveTemplate(template string, params map[string]string) (string, error) 
 		return "", fmt.Errorf("invalid tokens: %q", missingParams.List())
 	}
 	return resolved, nil
+}
+
+func getCredentialsMany(k8s kubernetes.Interface, refs []*v1.SecretReference) (map[string]string, error) {
+	ret := make(map[string]string)
+	for i, ref := range refs {
+		creds, err := getCredentials(k8s, ref)
+		if err != nil {
+			return nil, err
+		}
+		if creds != nil {
+			for k, v := range creds {
+				name := fmt.Sprintf("%.2d/%s/%s", i, ref.Name, k)
+				ret[name] = v
+			}
+		}
+	}
+	return ret, nil
 }
 
 func getCredentials(k8s kubernetes.Interface, ref *v1.SecretReference) (map[string]string, error) {
