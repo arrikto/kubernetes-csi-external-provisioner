@@ -449,12 +449,7 @@ func (p *csiProvisioner) Provision(options controller.ProvisionOptions) (*v1.Per
 	rep := &csi.CreateVolumeResponse{}
 
 	// Resolve provision secret credentials.
-	provisionerSecretsRef, err := getSecretReferenceMany(p.client, provisionerSecretParams, options.StorageClass.Parameters, pvName, &v1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      options.PVC.Name,
-			Namespace: options.PVC.Namespace,
-		},
-	})
+	provisionerSecretsRef, err := getSecretReferenceMany(p.client, provisionerSecretParams, options.StorageClass.Parameters, pvName, options.PVC)
 	if err != nil {
 		return nil, err
 	}
