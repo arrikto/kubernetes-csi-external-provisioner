@@ -83,6 +83,9 @@ const (
 	prefixedProvisionerSecretNameKey      = csiParameterPrefix + "provisioner-secret-name"
 	prefixedProvisionerSecretNamespaceKey = csiParameterPrefix + "provisioner-secret-namespace"
 
+	prefixedCryptSecretNameKey      = csiParameterPrefix + "crypt-secret-name"
+	prefixedCryptSecretNamespaceKey = csiParameterPrefix + "crypt-secret-namespace"
+
 	prefixedControllerPublishSecretNameKey      = csiParameterPrefix + "controller-publish-secret-name"
 	prefixedControllerPublishSecretNamespaceKey = csiParameterPrefix + "controller-publish-secret-namespace"
 
@@ -155,6 +158,12 @@ var (
 		deprecatedSecretNamespaceKey: provisionerSecretNamespaceKey,
 		secretNameKey:                prefixedProvisionerSecretNameKey,
 		secretNamespaceKey:           prefixedProvisionerSecretNamespaceKey,
+	}
+
+	cryptSecretParams = secretParamsMap{
+		name:               "Crypt",
+		secretNameKey:      prefixedCryptSecretNameKey,
+		secretNamespaceKey: prefixedCryptSecretNamespaceKey,
 	}
 
 	nodePublishSecretParams = secretParamsMap{
@@ -630,27 +639,38 @@ func (p *csiProvisioner) prepareProvision(ctx context.Context, claim *v1.Persist
 	}
 
 	// Resolve provision secret credentials.
-	provisionerSecretsRef, err := getSecretReferenceMany(ctx, p.client, provisionerSecretParams, sc.Parameters, pvName, &v1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      claim.Name,
-			Namespace: claim.Namespace,
-		},
-	})
+	provisionerSecretsRef, err := getSecretReferenceMany(ctx, p.client, provisionerSecretParams, sc.Parameters, pvName, claim)
 	if err != nil {
 		return nil, controller.ProvisioningNoChange, err
 	}
+
+	// Resolve crypt secret credentials.
+	cryptSecretRef, err := getSecretReference(cryptSecretParams, sc.Parameters, pvName, claim)
+	if err != nil {
+		return nil, controller.ProvisioningNoChange, err
+	}
+
+	// Add user's crypt key to the secrets of the request
+	provisionerSecretsRef = append(provisionerSecretsRef, cryptSecretRef)
+
 	provisionerCredentials, err := getCredentialsMany(ctx, p.client, provisionerSecretsRef)
 	if err != nil {
 		return nil, controller.ProvisioningNoChange, err
 	}
 	req.Secrets = provisionerCredentials
 
+	klog.Infof("CreateVolumeRequest %+v", req)
+
 	// Resolve controller publish, node stage, node publish secret references
 	controllerPublishSecretRef, err := getSecretReference(controllerPublishSecretParams, sc.Parameters, pvName, claim)
 	if err != nil {
 		return nil, controller.ProvisioningNoChange, err
 	}
-	nodeStageSecretRef, err := getSecretReference(nodeStageSecretParams, sc.Parameters, pvName, claim)
+	// To mount an encrypted volume, we need the user's crypt key.
+	// Note that we pass cryptSecretParams here, instead of
+	// nodeStageSecretParams, since nodeStageSecretRef can reference only
+	// one secret at a time.
+	nodeStageSecretRef, err := getSecretReference(cryptSecretParams, sc.Parameters, pvName, claim)
 	if err != nil {
 		return nil, controller.ProvisioningNoChange, err
 	}
@@ -736,8 +756,12 @@ func (p *csiProvisioner) Provision(ctx context.Context, options controller.Provi
 	for key, value := range options.PVC.Annotations {
 		parameters["pvc/" + key] = value
 	}
+	// Add StorageClass name
+	parameters["storageClassName"] = *options.PVC.Spec.StorageClassName
 	// Add PVC name
 	parameters["pvc-name"] = options.PVC.Name
+	// Add PVC namespace
+	parameters["pvc-namespace"] = options.PVC.Namespace
 
 	// Assign new parameter
 	req.Parameters = parameters
@@ -899,6 +923,8 @@ func removePrefixedParameters(param map[string]string) (map[string]string, error
 			case prefixedFsTypeKey:
 			case prefixedProvisionerSecretNameKey:
 			case prefixedProvisionerSecretNamespaceKey:
+			case prefixedCryptSecretNameKey:
+			case prefixedCryptSecretNamespaceKey:
 			case prefixedControllerPublishSecretNameKey:
 			case prefixedControllerPublishSecretNamespaceKey:
 			case prefixedNodeStageSecretNameKey:
@@ -1605,6 +1631,9 @@ func getSecretReferenceMany(ctx context.Context, k8s kubernetes.Interface, secre
 				nameParams["pvc.annotations['"+k+"']"] = v
 			}
 		}
+		// The resolved Secret name might contain a glob "*" that matches multiple
+		// resources. The admin can intentionally set it so that multiple refs to
+		// Secrets are returned by this function.
 		resolvedName, err := resolveTemplate(name, nameParams)
 		if err != nil {
 			klog.Warningf("could not resolve value %q: %v", name, err)
