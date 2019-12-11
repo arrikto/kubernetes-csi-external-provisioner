@@ -492,8 +492,12 @@ func (p *csiProvisioner) Provision(options controller.ProvisionOptions) (*v1.Per
 	for key, value := range options.PVC.Annotations {
 		parameters["pvc/" + key] = value
 	}
+	// Add StorageClass name
+	parameters["storageClassName"] = *options.PVC.Spec.StorageClassName
 	// Add PVC name
 	parameters["pvc-name"] = options.PVC.Name
+	// Add PVC namespace
+	parameters["pvc-namespace"] = options.PVC.Namespace
 
 	// Assign new parameter
 	req.Parameters = parameters
