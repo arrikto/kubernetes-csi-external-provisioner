@@ -28,6 +28,9 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
@@ -1270,8 +1273,19 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 			glog.Info(logOperation(operation, "volume provision ignored: %v", ierr))
 			return ProvisioningFinished, nil
 		}
-		err = fmt.Errorf("failed to provision volume with StorageClass %q: %v", claimClass, err)
-		ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
+
+		var eventType string
+		var eventReason string
+		if st, ok := status.FromError(err); ok && st.Code() == codes.DeadlineExceeded {
+			eventType = v1.EventTypeNormal
+			eventReason = "ProvisioningInProgress"
+			err = fmt.Errorf("Timed out waiting for volume with StorageClass %q to be provisioned: The operation will be retried", claimClass)
+		} else {
+			eventType = v1.EventTypeWarning
+			eventReason = "ProvisioningFailed"
+			err = fmt.Errorf("Failed to provision volume with StorageClass %q: %v", claimClass, err)
+		}
+		ctrl.eventRecorder.Event(claim, eventType, eventReason, err.Error())
 		return result, err
 	}
 
