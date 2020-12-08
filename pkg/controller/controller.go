@@ -25,6 +25,7 @@ import (
 	"path"
 	"strings"
 	"time"
+	"strconv"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/kubernetes-csi/csi-lib-utils/connection"
@@ -551,9 +552,25 @@ func (p *csiProvisioner) Provision(options controller.ProvisionOptions) (*v1.Per
 		return nil, capErr
 	}
 
+	// Add annotations for replicated volumes
+	pvAnnotations := map[string]string{}
+	replicas := 1
+	if rf, found := parameters["pvc/rok/replicas"]; found {
+		replicas, err = strconv.Atoi(rf)
+	} else if rf, found := parameters["sc/rok/replicas"]; found {
+		replicas, err = strconv.Atoi(rf)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if replicas > 1 {
+		pvAnnotations["rok/replication-status"] = "Healthy"
+	}
+
 	pv := &v1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: pvName,
+			Annotations: pvAnnotations,
 		},
 		Spec: v1.PersistentVolumeSpec{
 			AccessModes:  options.PVC.Spec.AccessModes,
